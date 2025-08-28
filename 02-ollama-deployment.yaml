@@ -1,0 +1,108 @@
+# working-init-fixed.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama-deployment
+  labels:
+    app: ollama-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama-deployment
+  template:
+    metadata:
+      labels:
+        app: ollama-deployment
+    spec:
+      initContainers:
+      - name: model-downloader
+        image: ollama/ollama:latest
+        command: ['sh', '-c']
+        args:
+        - |
+          set -e
+          export OLLAMA_MODELS=/models
+          echo "Starting ollama server for model download..."
+          
+          # Start ollama server in background
+          ollama serve &
+          SERVER_PID=$!
+          
+          # Wait for server to be ready
+          echo "Waiting for Ollama server to be ready..."
+          for i in {1..30}; do
+            if curl -s -f http://localhost:11434/ > /dev/null; then
+              echo "Ollama server is ready."
+              break
+            fi
+            sleep 2
+          done
+
+          echo "Downloading gemma3:270m model..."
+          ollama pull gemma3:270m
+          
+          if [ $? -eq 0 ]; then
+            echo "Model download successful!"
+          else
+            echo "Model download failed!"
+            exit 1
+          fi
+          
+          # Stop server
+          kill $SERVER_PID
+          wait
+          
+          echo "Init container complete - model ready"
+        env:
+        - name: OLLAMA_MODELS
+          value: /models
+        volumeMounts:
+        - name: model-storage
+          mountPath: /models
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+      containers:
+      - name: ollama
+        image: ollama/ollama:latest
+        ports:
+        - containerPort: 11434
+          name: http
+        env:
+        - name: OLLAMA_MODELS
+          value: /models
+        - name: OLLAMA_HOST
+          value: "0.0.0.0"
+        - name: OLLAMA_NUM_PARALLEL
+          value: "1"
+        volumeMounts:
+        - name: model-storage
+          mountPath: /models
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 1500m
+            memory: 3Gi
+        readinessProbe:
+          httpGet:
+            path: /api/tags
+            port: 11434
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /api/tags
+            port: 11434
+          initialDelaySeconds: 30
+          periodSeconds: 30
+      volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: ollama-model-storage
